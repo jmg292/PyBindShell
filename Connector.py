@@ -12,8 +12,8 @@ class ShellConnectionAnonymizer:
 
     def __init__(self, socks_port=9999):
         self._socks_port = socks_port
-        self._data_dir = getattr(sys, "_MEIPASS", os.path.join(os.getcwd(), "bin"))
-        self._tor_exe = os.path.join(self._data_dir, "tor.exe")
+        self._data_dir = getattr(sys, "_MEIPASS", os.path.join(os.getcwd(), "bin"))		
+        self._tor_exe = os.path.join(self._data_dir, "tor.exe") if "nt" in os.name else "tor"
         self._tor_data_dir = os.path.join(self._data_dir, "tor_data")
         self._stem_controller_handle = None
         self._tor_process_handle = None
@@ -38,7 +38,7 @@ class ShellConnectionAnonymizer:
 
     def anonymize(self):
         print("[+] Spinning up anonymizer.")
-        if not os.path.isfile(self._tor_exe):
+        if not os.path.isfile(self._tor_exe) and "nt" in os.name:
             print("[!] Unable to launch anonymizer, TOR exe not found")
             return
         self._tor_process_handle = stem.process.launch_tor_with_config(
