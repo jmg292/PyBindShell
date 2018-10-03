@@ -184,6 +184,12 @@ class BoundShellConnector(object):
             response = self._handle_download(command)
         elif command.lower().strip() == "lcwd":
             response = os.getcwd()
+        elif command.lower().strip() == "active_discovery":
+            self._socket.sendall(bytes(command, 'utf-8'))
+            print(self._socket.recv(1024))
+            prompt = input("Type 'continue' to perform active discovery: ") + "\n"
+            self._socket.sendall(bytes(prompt, 'utf-8'))
+            response = self._get_response()["response"]
         elif command.lower().strip() == "exit":
             self._socket.sendall(b"exit\r\n")
             self._socket.close()

